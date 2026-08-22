@@ -1,12 +1,10 @@
-import asyncio
 import hashlib
-import json
 import time
 import streamlit as st
-from services.scraper import fetch_page, _get_cache_path
-from services.llm_analyzer import analyze_pricing, DEFAULT_MODEL, OPENROUTER_API_URL
+from agents.hermes import run_pipeline, AGENT_META
+from services.openrouter_client import DEFAULT_MODEL, OPENROUTER_API_URL
 
-# 1. Page Configuration
+# ── Page Config ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="The Adversarial Buyer",
     page_icon="⚡",
@@ -14,307 +12,448 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# High-Contrast Enterprise Styling
+# ── Global Styles ────────────────────────────────────────────────────────────
 st.markdown(
     """
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
     .main-title {
-        font-size: 2.6rem;
-        font-weight: 900;
-        letter-spacing: -0.04em;
-        margin-bottom: 0.2rem;
+        font-size: 2.8rem; font-weight: 900;
+        letter-spacing: -0.04em; margin-bottom: 0.2rem;
+        background: linear-gradient(135deg, #f97316, #ef4444);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    .sub-title {
-        font-size: 1.15rem;
-        color: #9ca3af;
-        margin-bottom: 1.8rem;
+    .sub-title { font-size: 1.1rem; color: #9ca3af; margin-bottom: 1.5rem; }
+
+    /* Agent status cards */
+    .agent-card {
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px 16px; border-radius: 8px; margin-bottom: 6px;
+        background: #0f172a; border: 1px solid #1e293b;
+        font-size: 0.92rem;
     }
-    div[data-testid="stTextInput"] input {
-        font-size: 1.2rem;
-        padding: 0.75rem 1rem;
-        border-radius: 8px;
-    }
+    .agent-card.waiting  { border-color: #334155; color: #64748b; }
+    .agent-card.running  { border-color: #f59e0b; color: #fbbf24; background: rgba(245,158,11,0.08); }
+    .agent-card.done     { border-color: #22c55e; color: #86efac; background: rgba(34,197,94,0.07); }
+    .agent-card.error    { border-color: #ef4444; color: #f87171; background: rgba(239,68,68,0.08); }
+
+    /* Verdict banners */
     .verdict-rejected {
-        background-color: rgba(239, 68, 68, 0.15);
-        border: 1px solid #ef4444;
-        border-radius: 8px;
-        padding: 12px 18px;
-        font-weight: 700;
-        color: #f87171;
-        font-size: 1.25rem;
-        margin-bottom: 1.5rem;
+        background: rgba(239,68,68,0.12); border: 1px solid #ef4444;
+        border-radius: 8px; padding: 14px 20px; font-weight: 700;
+        color: #f87171; font-size: 1.3rem; margin-bottom: 1.5rem;
     }
     .verdict-warning {
-        background-color: rgba(245, 158, 11, 0.15);
-        border: 1px solid #f59e0b;
-        border-radius: 8px;
-        padding: 12px 18px;
-        font-weight: 700;
-        color: #fbbf24;
-        font-size: 1.25rem;
-        margin-bottom: 1.5rem;
+        background: rgba(245,158,11,0.12); border: 1px solid #f59e0b;
+        border-radius: 8px; padding: 14px 20px; font-weight: 700;
+        color: #fbbf24; font-size: 1.3rem; margin-bottom: 1.5rem;
     }
-    .rank-badge-1 {
-        background-color: #ef4444;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0.05em;
-        display: inline-block;
-        margin-bottom: 6px;
+
+    /* Rank badges */
+    .badge { padding: 3px 10px; border-radius: 4px; font-size: 0.72rem;
+             font-weight: 800; letter-spacing: 0.06em; display: inline-block; margin-bottom: 6px; }
+    .badge-1 { background: #ef4444; color: #fff; }
+    .badge-2 { background: #f97316; color: #fff; }
+    .badge-n { background: #64748b; color: #fff; }
+
+    /* Judge score pills */
+    .judge-pill {
+        display: inline-block; padding: 2px 10px; border-radius: 20px;
+        font-size: 0.78rem; font-weight: 700; margin-right: 6px;
     }
-    .rank-badge-2 {
-        background-color: #f97316;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0.05em;
-        display: inline-block;
-        margin-bottom: 6px;
-    }
-    .rank-badge-other {
-        background-color: #64748b;
-        color: white;
-        padding: 3px 10px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 800;
-        letter-spacing: 0.05em;
-        display: inline-block;
-        margin-bottom: 6px;
-    }
-    .tech-pill {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 6px;
-        padding: 4px 10px;
-        font-size: 0.82rem;
-        font-family: monospace;
-        color: #93c5fd;
-        display: inline-block;
-        margin-right: 8px;
-        margin-bottom: 8px;
+    .judge-valid { background: rgba(34,197,94,0.2); color: #4ade80; border: 1px solid #22c55e; }
+    .judge-weak  { background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid #f59e0b; }
+    .judge-hall  { background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid #ef4444; }
+
+    /* Human review checkboxes */
+    .review-header {
+        font-size: 1.4rem; font-weight: 800; margin-bottom: 0.5rem; color: #e2e8f0;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="main-title">THE ADVERSARIAL BUYER</div>', unsafe_allow_html=True)
+# ── Header ───────────────────────────────────────────────────────────────────
+st.markdown('<div class="main-title">⚡ THE ADVERSARIAL BUYER</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">Hostile enterprise procurement simulator. Identifies the lethal objections your Go-To-Market team cannot survive.</div>',
+    '<div class="sub-title">Multi-agent hostile procurement simulator · '
+    'CFO · CISO · VP Eng · LLM Judge · Human Review</div>',
     unsafe_allow_html=True,
 )
 
-# 2. Input Section
+# ── Session State Init ────────────────────────────────────────────────────────
+for k, v in [
+    ("pipeline_result", None),
+    ("scanned_url", ""),
+    ("agent_states", {}),        # key → {status, info}
+    ("approved_indices", None),  # set by human review step
+]:
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ── Input ─────────────────────────────────────────────────────────────────────
 target_url = st.text_input(
     "Target Pricing / Landing Page URL",
     placeholder="https://company.com/pricing",
-    help="Enter the URL of the company or pricing page to stress-test against hostile procurement.",
+    help="Paste the live URL of any company's pricing page.",
 )
+scan_btn = st.button("⚡ Stress-Test Deal Survival", type="primary", use_container_width=True)
 
-scan_submitted = st.button("Stress-Test Deal Survival (Scan Page)", type="primary", use_container_width=True)
+# ── Reset on new URL ──────────────────────────────────────────────────────────
+if scan_btn and target_url and target_url != st.session_state.scanned_url:
+    st.session_state.pipeline_result = None
+    st.session_state.approved_indices = None
+    st.session_state.agent_states = {}
+    st.session_state.scanned_url = target_url
 
-# 3. Execution & Visual Hierarchy
-if scan_submitted:
-    if not target_url:
-        st.warning("Please enter a valid pricing page URL to initiate adversarial audit.")
+# ── Pipeline Execution ────────────────────────────────────────────────────────
+if scan_btn and target_url and st.session_state.pipeline_result is None:
+    st.divider()
+    st.markdown("### 🤖 Agent Pipeline — Live Status")
+    st.caption("Watch each agent activate in real time.")
+
+    # One empty placeholder per agent
+    slots = {meta["key"]: st.empty() for meta in AGENT_META}
+
+    def render_card(key: str, status: str, label: str = "", extra: str = ""):
+        meta = next(m for m in AGENT_META if m["key"] == key)
+        icon_map = {"waiting": "⏳", "running": "🟡", "done": "✅", "error": "❌"}
+        icon = icon_map.get(status, "⏳")
+        line2 = f"<br><small style='color:#94a3b8'>{extra}</small>" if extra else ""
+        html = (
+            f'<div class="agent-card {status}">'
+            f'{meta["icon"]} <strong>{meta["name"]}</strong> — {label or meta["desc"]}'
+            f'{line2}</div>'
+        )
+        slots[key].markdown(html, unsafe_allow_html=True)
+
+    # Initialise all as waiting
+    for meta in AGENT_META:
+        render_card(meta["key"], "waiting")
+
+    def on_status(key: str, status: str, info: dict):
+        st.session_state.agent_states[key] = {"status": status, "info": info}
+        label_map = {
+            "running": "Analyzing...",
+            "done": f"Done ({info.get('elapsed', 0):.1f}s)"
+                    + (f" · {info.get('count','')} objections" if "count" in info else "")
+                    + (f" · {info.get('chars',0):,} chars" if "chars" in info else "")
+                    + (f" · {info.get('valid',0)} valid / {info.get('total',0)} total" if "valid" in info else ""),
+            "error": f"Error: {info.get('msg', 'unknown')}",
+        }
+        extra_map = {
+            "scraper": f"Cache: {'HIT ✓' if info.get('from_cache') else 'FRESH'}",
+            "judge":   f"Filtered: {info.get('total',0) - info.get('valid',0)} hallucinated / weak",
+        }
+        render_card(
+            key,
+            status,
+            label=label_map.get(status, ""),
+            extra=extra_map.get(key, "") if status == "done" else "",
+        )
+
+    # Run Hermes
+    try:
+        result = run_pipeline(target_url, on_status=on_status)
+        st.session_state.pipeline_result = result
+    except Exception as e:
+        st.error(f"Pipeline failed: {e}")
+        st.stop()
+
+    st.rerun()
+
+# ── Human-in-the-Loop Review ─────────────────────────────────────────────────
+if (
+    st.session_state.pipeline_result is not None
+    and st.session_state.approved_indices is None
+):
+    result = st.session_state.pipeline_result
+    all_objs = result["all_objections"]
+
+    st.divider()
+
+    # Replay agent status panel (from saved states)
+    if st.session_state.agent_states:
+        with st.expander("🤖 Agent Pipeline — Completed", expanded=False):
+            for meta in AGENT_META:
+                state = st.session_state.agent_states.get(meta["key"], {})
+                status = state.get("status", "done")
+                info = state.get("info", {})
+                extra = ""
+                if meta["key"] == "scraper":
+                    extra = f"Cache: {'HIT ✓' if info.get('from_cache') else 'FRESH'}"
+                elif meta["key"] == "judge":
+                    extra = f"Filtered: {info.get('total',0) - info.get('valid',0)} weak/hallucinated"
+                label = f"Done ({info.get('elapsed', 0):.1f}s)" if status == "done" else status.title()
+                html = (
+                    f'<div class="agent-card {status}">'
+                    f'{meta["icon"]} <strong>{meta["name"]}</strong> — {label}'
+                    + (f"<br><small style='color:#94a3b8'>{extra}</small>" if extra else "")
+                    + "</div>"
+                )
+                st.markdown(html, unsafe_allow_html=True)
+
+    # Human review panel
+    st.markdown('<div class="review-header">🧑 Human-in-the-Loop Review</div>', unsafe_allow_html=True)
+    st.markdown(
+        "The **LLM Judge** has scored every objection. "
+        "**You** decide which ones make it into the final boardroom report. "
+        "Uncheck anything you believe is irrelevant or not applicable to your situation."
+    )
+    st.caption("Only checked objections will appear in the final ranked report.")
+
+    approval_checks = {}
+
+    for i, obj in enumerate(all_objs):
+        verdict = obj.get("judge_verdict", "VALID")
+        grounded = obj.get("judge_grounded_score", 7)
+        realism = obj.get("judge_real_buyer_score", 7)
+        persona = obj.get("persona", "Unknown")
+        trigger = obj.get("trigger_line", "")[:80]
+        reasoning = obj.get("judge_reasoning", "")
+
+        # Color pill
+        pill_cls = {"VALID": "judge-valid", "WEAK": "judge-weak"}.get(verdict, "judge-hall")
+        pill_html = (
+            f'<span class="judge-pill {pill_cls}">{verdict}</span>'
+            f'<span class="judge-pill" style="background:#1e293b;color:#94a3b8;border:1px solid #334155">'
+            f'Ground {grounded}/10 · Realism {realism}/10</span>'
+        )
+
+        with st.container(border=True):
+            col_chk, col_info = st.columns([0.7, 5])
+            with col_chk:
+                # Pre-check VALID objections, uncheck weak/hallucinated
+                default = verdict == "VALID"
+                approval_checks[i] = st.checkbox(
+                    "Include",
+                    value=default,
+                    key=f"approve_{i}",
+                    label_visibility="collapsed",
+                )
+            with col_info:
+                st.markdown(pill_html, unsafe_allow_html=True)
+                st.markdown(f"**[{persona}]** — *\"{trigger}...\"*")
+                st.caption(f"⚖️ Judge says: {reasoning}")
+
+    compile_btn = st.button(
+        "📋 Compile Final Boardroom Report →",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if compile_btn:
+        approved = [i for i, checked in approval_checks.items() if checked]
+        st.session_state.approved_indices = approved
+        st.rerun()
+
+# ── Final Report ──────────────────────────────────────────────────────────────
+if (
+    st.session_state.pipeline_result is not None
+    and st.session_state.approved_indices is not None
+):
+    result = st.session_state.pipeline_result
+    all_objs = result["all_objections"]
+    approved_indices = st.session_state.approved_indices
+    final_objs = [all_objs[i] for i in approved_indices]
+
+    # Re-rank approved objections
+    final_objs.sort(key=lambda x: x.get("severity_score", 0), reverse=True)
+    rank_badges = ["LETHAL DEAL KILLER", "CRITICAL BLOCKER", "PROCUREMENT GATE"]
+    for i, obj in enumerate(final_objs, start=1):
+        obj["rank"] = i
+        obj["rank_badge"] = rank_badges[min(i - 1, 2)]
+
+    overall_score = (
+        int(sum(o.get("severity_score", 0) for o in final_objs) / len(final_objs))
+        if final_objs else 0
+    )
+
+    st.divider()
+
+    # ── Agent summary (collapsed) ─────────────────────────────────────────
+    if st.session_state.agent_states:
+        with st.expander("🤖 Agent Pipeline — Completed", expanded=False):
+            for meta in AGENT_META:
+                state = st.session_state.agent_states.get(meta["key"], {})
+                status = state.get("status", "done")
+                info = state.get("info", {})
+                extra = ""
+                if meta["key"] == "scraper":
+                    extra = f"Cache: {'HIT ✓' if info.get('from_cache') else 'FRESH'}"
+                elif meta["key"] == "judge":
+                    extra = f"Filtered: {info.get('total',0) - info.get('valid',0)} weak/hallucinated"
+                label = f"Done ({info.get('elapsed', 0):.1f}s)" if status == "done" else status.title()
+                html = (
+                    f'<div class="agent-card {status}">'
+                    f'{meta["icon"]} <strong>{meta["name"]}</strong> — {label}'
+                    + (f"<br><small style='color:#94a3b8'>{extra}</small>" if extra else "")
+                    + "</div>"
+                )
+                st.markdown(html, unsafe_allow_html=True)
+
+    # ── Verdict banner ────────────────────────────────────────────────────
+    if overall_score >= 70:
+        verdict_label = "DEAL REJECTED"
+        st.markdown(
+            f'<div class="verdict-rejected">🛑 <strong>BOARDROOM VERDICT:</strong> '
+            f'{verdict_label} — Fatal GTM Vulnerabilities Detected</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        scrape_time = 0.0
-        llm_time = 0.0
-        is_from_cache = False
-        cache_hash = hashlib.sha1(target_url.encode("utf-8")).hexdigest()
+        verdict_label = "DEAL AT RISK"
+        st.markdown(
+            f'<div class="verdict-warning">⚠️ <strong>BOARDROOM VERDICT:</strong> '
+            f'{verdict_label} — High Procurement Resistance</div>',
+            unsafe_allow_html=True,
+        )
 
-        with st.status("Simulating Hostile Procurement Committee...", expanded=True) as status_box:
-            # Phase 1: Scrape
-            st.write("📡 **Phase 1: Initializing Jina Reader & DOM Extractor...**")
-            start_scrape = time.perf_counter()
-            is_from_cache = _get_cache_path(target_url).exists()
-            page_markdown = fetch_page(target_url)
-            scrape_time = time.perf_counter() - start_scrape
-            st.write(f"✓ Page extracted ({len(page_markdown)} chars in {scrape_time:.2f}s, Cache: {is_from_cache})")
+    # ── Damage score + human approval summary ─────────────────────────────
+    col_score, col_meta = st.columns([1, 2.5], gap="large")
+    with col_score:
+        st.metric(
+            "Overall Deal Damage Score",
+            f"{overall_score} / 100",
+            delta=f"-{overall_score // 5} pts Win Rate Impact",
+            delta_color="inverse",
+        )
+    with col_meta:
+        st.markdown("#### Human-Approved Objections")
+        total = len(all_objs)
+        approved_count = len(final_objs)
+        skipped = total - approved_count
+        st.write(
+            f"**{approved_count}** objections approved · **{skipped}** dismissed by human review · "
+            f"**{sum(1 for o in all_objs if o.get('judge_verdict') != 'VALID')}** filtered by LLM Judge"
+        )
+        col_r, col_n = st.columns(2)
+        with col_r:
+            if st.button("🔄 Re-run Human Review", use_container_width=True):
+                st.session_state.approved_indices = None
+                st.rerun()
+        with col_n:
+            if st.button("🆕 Scan New URL", use_container_width=True):
+                st.session_state.pipeline_result = None
+                st.session_state.approved_indices = None
+                st.session_state.agent_states = {}
+                st.session_state.scanned_url = ""
+                st.rerun()
 
-            # Phase 2: AI Reasoning
-            st.write(f"🧠 **Phase 2: Dispatching to Adversarial Buyer LLM ({DEFAULT_MODEL})...**")
-            start_llm = time.perf_counter()
-            try:
-                ai_data = analyze_pricing(page_markdown)
-            except Exception as e:
-                st.warning(f"Live AI analysis fallback triggered: {e}")
-                ai_data = {
-                    "deal_verdict": "DEAL REJECTED",
-                    "overall_damage_score": 88,
-                    "deal_killer_headline": "Mandatory annual commitments, opaque unit economics, and locked SSO kill enterprise deal velocity.",
-                    "ranked_objections": [
-                        {
-                            "rank": 1,
-                            "rank_badge": "LETHAL DEAL KILLER",
-                            "persona": "Chief Financial Officer (CFO)",
-                            "domain": "Finance & Procurement",
-                            "severity_score": 94,
-                            "trigger_line": '"Contact Us for Custom Pricing" with mandatory annual minimum commitments hidden behind sales wall.',
-                            "gtm_vulnerability": "Sales reps cannot defend undisclosed cost escalation multipliers during commercial procurement.",
-                            "lethal_objection": "Lack of transparent unit economics triggers aggressive lock-in risk and immediate budget freeze.",
-                            "gtm_survival_fix": "Publish volumetric calculators with explicit discount tiers and contract cancellation clauses.",
-                        },
-                        {
-                            "rank": 2,
-                            "rank_badge": "CRITICAL BLOCKER",
-                            "persona": "Chief Information Security Officer (CISO)",
-                            "domain": "Security & Compliance",
-                            "severity_score": 88,
-                            "trigger_line": '"Enterprise tier includes SSO, Audit Logs, and SOC2 Report access upon request."',
-                            "gtm_vulnerability": "Gating basic identity governance (SAML/SCIM) behind top enterprise tax triggers immediate vendor review failure.",
-                            "lethal_objection": "Security is monetized as an upsell addon rather than a baseline infrastructure standard.",
-                            "gtm_survival_fix": "Unbundle SAML SSO and audit logs into standard tiers; monetize custom key management (BYOK) instead.",
-                        },
-                        {
-                            "rank": 3,
-                            "rank_badge": "PROCUREMENT GATE",
-                            "persona": "VP of Engineering",
-                            "domain": "Technical Due Diligence",
-                            "severity_score": 82,
-                            "trigger_line": '"Unlimited API calls* (*subject to unspecified Fair Use Policy throttling thresholds)."',
-                            "gtm_vulnerability": "Engineering buyers reject vague throttling without SLA uptime and hard burst guarantees.",
-                            "lethal_objection": "Ambiguous throttling creates production outage liability for downstream microservices.",
-                            "gtm_survival_fix": "Publish explicit rate limits (e.g., 5,000 req/min with burst up to 10k req/min) and SLA status page.",
-                        },
-                    ],
-                }
-            llm_time = time.perf_counter() - start_llm
-            st.write(f"✓ Adversarial personas executed in {llm_time:.2f}s")
+    # ── Ranked Objections ─────────────────────────────────────────────────
+    st.markdown("### 🎯 Ranked Lethal Objections (Human-Approved · Judge-Validated)")
+    st.caption("Only objections you approved with judge realism ≥ 6/10.")
 
-            status_box.update(
-                label=f"Adversarial Audit Complete (Total: {scrape_time + llm_time:.2f}s) — Ranked Objections Ready",
-                state="complete",
-                expanded=False,
-            )
+    for obj in final_objs:
+        rank = obj.get("rank", 1)
+        badge_cls = "badge-1" if rank == 1 else ("badge-2" if rank == 2 else "badge-n")
+        badge_txt = obj.get("rank_badge", f"RANK #{rank}")
+        grounded = obj.get("judge_grounded_score", "-")
+        realism = obj.get("judge_real_buyer_score", "-")
 
-        st.divider()
+        with st.container(border=True):
+            col_left, col_right = st.columns([1, 2.5], gap="medium")
 
-        # Verdict Stamp Banner
-        verdict = ai_data.get("deal_verdict", "DEAL REJECTED")
-        if "REJECT" in verdict.upper():
-            st.markdown(
-                f'<div class="verdict-rejected">🛑 <strong>BOARDROOM VERDICT:</strong> {verdict} — Fatal GTM Vulnerabilities Detected</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<div class="verdict-warning">⚠️ <strong>BOARDROOM VERDICT:</strong> {verdict} — High Procurement Resistance</div>',
-                unsafe_allow_html=True,
-            )
+            with col_left:
+                st.markdown(
+                    f'<span class="badge {badge_cls}">RANK #{rank} · {badge_txt}</span>',
+                    unsafe_allow_html=True,
+                )
+                st.subheader(obj.get("persona", "Buyer"))
+                st.caption(f"Domain: {obj.get('domain', '')}")
+                st.metric("Damage Severity", f"{obj.get('severity_score', 0)}/100")
+                # Judge scores
+                g_color = "#4ade80" if grounded >= 7 else "#fbbf24"
+                r_color = "#4ade80" if realism >= 7 else "#fbbf24"
+                st.markdown(
+                    f"**LLM Judge:** "
+                    f'<span style="color:{g_color}">Ground {grounded}/10</span> · '
+                    f'<span style="color:{r_color}">Realism {realism}/10</span>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"_{obj.get('judge_reasoning', '')}_")
 
-        # Top Level Deal Damage Metric
-        damage_score = ai_data.get("overall_damage_score", 85)
-        headline = ai_data.get("deal_killer_headline", "Severe commercial friction detected.")
+            with col_right:
+                st.markdown("**Exact Trigger Line on Site (The Crime):**")
+                st.error(f'"{obj.get("trigger_line", "")}"', icon="🚨")
 
-        col_metric, col_headline = st.columns([1, 2.5], gap="large")
-        with col_metric:
-            st.metric(
-                label="Overall Deal Damage Score",
-                value=f"{damage_score} / 100",
-                delta=f"-{damage_score // 5} pts Win Rate Impact",
-                delta_color="inverse",
-                help="Composite probability that this pricing structure will get killed during enterprise procurement.",
-            )
-        with col_headline:
-            st.markdown("#### **Executive Summary (The Deal Killer)**")
-            st.write(headline)
+                st.markdown("**Lethal Buyer Objection:**")
+                st.write(obj.get("lethal_objection", ""))
 
-        st.markdown("### 🎯 Ranked Lethal Objections (Go-To-Market Survival List)")
-        st.caption("Sorted strictly from most lethal to least lethal objection based on real page citations.")
+                if obj.get("gtm_vulnerability"):
+                    st.markdown("**Why GTM / Sales Cannot Defend This:**")
+                    st.markdown(f"*{obj.get('gtm_vulnerability')}*")
 
-        objections = ai_data.get("ranked_objections", [])
-        
-        for item in objections:
-            rank = item.get("rank", 1)
-            rank_badge_cls = "rank-badge-1" if rank == 1 else ("rank-badge-2" if rank == 2 else "rank-badge-other")
-            badge_label = item.get("rank_badge", f"RANK #{rank}")
+                st.markdown("**GTM Survival Fix:**")
+                st.success(obj.get("gtm_survival_fix", ""), icon="✅")
 
-            with st.container(border=True):
-                col_left, col_right = st.columns([1, 2.5], gap="medium")
+    # ── Judge's Inspector Tabs ────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🔬 Judge's Live Architecture & Pipeline Inspector")
+    st.caption("Full transparency: raw data flowing through every layer of the system.")
 
-                with col_left:
-                    st.markdown(f'<span class="{rank_badge_cls}">RANK #{rank} · {badge_label}</span>', unsafe_allow_html=True)
-                    st.subheader(item.get("persona", "Procurement Gate"))
-                    st.caption(f"Domain: {item.get('domain', 'Enterprise Evaluation')}")
-                    st.metric(
-                        label="Damage Severity",
-                        value=f"{item.get('severity_score', 80)}/100",
-                    )
+    page_content = result.get("page_content", "")
+    timings = result.get("timings", {})
+    cache_hash = hashlib.sha1(st.session_state.scanned_url.encode()).hexdigest()
 
-                with col_right:
-                    st.markdown("**Exact Trigger Line on Site (The Crime):**")
-                    st.error(f'"{item.get("trigger_line", "")}"', icon="🚨")
+    col_t1, col_t2, col_t3, col_t4 = st.columns(4)
+    with col_t1:
+        st.metric("Scrape", f"{timings.get('scraper', 0):.2f}s",
+                  f"Cache: {'HIT' if result.get('from_cache') else 'FRESH'}")
+    with col_t2:
+        st.metric("CFO Agent", f"{timings.get('cfo', 0):.2f}s")
+    with col_t3:
+        st.metric("CISO + VP Eng", f"{timings.get('ciso', 0) + timings.get('vpeng', 0):.2f}s")
+    with col_t4:
+        st.metric("LLM Judge", f"{timings.get('judge', 0):.2f}s")
 
-                    st.markdown("**Lethal Buyer Objection:**")
-                    st.write(item.get("lethal_objection", ""))
+    tab_dom, tab_agents, tab_judge, tab_export = st.tabs([
+        "🌐 1. Scraped DOM",
+        "🤖 2. Raw Agent Output",
+        "⚖️ 3. Judge Scores",
+        "📋 4. Export Brief",
+    ])
 
-                    if item.get("gtm_vulnerability"):
-                        st.markdown("**Why GTM / Sales Cannot Defend This:**")
-                        st.markdown(f"*{item.get('gtm_vulnerability')}*")
+    with tab_dom:
+        st.markdown(f"- **Source:** `{st.session_state.scanned_url}`")
+        st.markdown(f"- **Cache file:** `./cache/scrapes/{cache_hash}.json`")
+        st.text_area("Clean Markdown fed to all agents:", value=page_content, height=300, disabled=True)
 
-                    st.markdown("**GTM Survival Fix:**")
-                    st.success(item.get("gtm_survival_fix", ""), icon="✅")
+    with tab_agents:
+        st.markdown("All objections from all buyer agents (before human review):")
+        st.json(result["all_objections"])
 
-        # ----------------------------------------------------
-        # 🔬 JUDGE'S DEEP-DIVE INSPECTOR (BACKEND + LLM TRACE)
-        # ----------------------------------------------------
-        st.divider()
-        st.markdown("### 🔬 Judge's Live Architecture & Pipeline Inspector")
-        st.caption("Inspect live data flowing through the scraper, cache layer, and LLM reasoning engine.")
+    with tab_judge:
+        st.markdown("**LLM Judge Scores per Objection:**")
+        judge_rows = [
+            {
+                "Agent": obj.get("agent", "").upper(),
+                "Persona": obj.get("persona", ""),
+                "Grounded": obj.get("judge_grounded_score", "-"),
+                "Realism": obj.get("judge_real_buyer_score", "-"),
+                "Verdict": obj.get("judge_verdict", ""),
+                "Reasoning": obj.get("judge_reasoning", ""),
+            }
+            for obj in result["all_objections"]
+        ]
+        st.dataframe(judge_rows, use_container_width=True)
+        st.markdown("**Model & Endpoint:**")
+        st.markdown(f"- `{DEFAULT_MODEL}` via `{OPENROUTER_API_URL}`")
 
-        col_p1, col_p2, col_p3 = st.columns(3)
-        with col_p1:
-            st.metric("Scrape Latency", f"{scrape_time:.2f}s", f"Cache: {'HIT' if is_from_cache else 'FRESH'}")
-        with col_p2:
-            st.metric("AI Reasoning Latency", f"{llm_time:.2f}s", DEFAULT_MODEL.split(":")[0])
-        with col_p3:
-            st.metric("DOM Content Size", f"{len(page_markdown):,} chars", f"SHA1: {cache_hash[:8]}...")
-
-        tab_scraped, tab_llm, tab_export = st.tabs([
-            "🌐 1. Scraped Clean DOM (Jina Reader)",
-            "🤖 2. LLM Prompt & Raw JSON Output",
-            "📋 3. Executive Markdown Brief",
-        ])
-
-        with tab_scraped:
-            st.markdown("**Live Web Content Extracted:**")
-            st.markdown(f"- **Source URL:** `{target_url}`")
-            st.markdown(f"- **Disk Cache Location:** `./cache/scrapes/{cache_hash}.json`")
-            st.text_area(
-                "Raw Clean Markdown fed to the Adversarial Agent:",
-                value=page_markdown,
-                height=300,
-                disabled=True,
-            )
-
-        with tab_llm:
-            st.markdown("**LLM Agent Configuration:**")
-            st.markdown(f"- **Model:** `{DEFAULT_MODEL}`")
-            st.markdown(f"- **Endpoint:** `{OPENROUTER_API_URL}`")
-            st.markdown("**Raw Structured JSON returned by LLM:**")
-            st.json(ai_data)
-
-        with tab_export:
-            report_md = f"""# Adversarial Buyer Report: {target_url}
-**Verdict:** {verdict}
-**Overall Deal Damage Score:** {damage_score}/100
-**Executive Summary:** {headline}
-
-## Ranked Lethal Objections:
-"""
-            for item in objections:
-                report_md += f"""
-### Rank #{item.get('rank')}: {item.get('persona')} (Severity: {item.get('severity_score')}/100)
-- **Page Quote:** {item.get('trigger_line')}
-- **Objection:** {item.get('lethal_objection')}
-- **GTM Vulnerability:** {item.get('gtm_vulnerability')}
-- **Recommended Fix:** {item.get('gtm_survival_fix')}
-"""
-            st.code(report_md, language="markdown")
+    with tab_export:
+        url_display = st.session_state.scanned_url
+        report_md = f"# Adversarial Buyer Report: {url_display}\n\n"
+        report_md += f"**Verdict:** {verdict_label}\n"
+        report_md += f"**Overall Deal Damage Score:** {overall_score}/100\n"
+        report_md += f"**Human-Approved Objections:** {len(final_objs)} / {len(all_objs)} total\n\n"
+        report_md += "## Ranked Lethal Objections\n"
+        for obj in final_objs:
+            report_md += f"\n### Rank #{obj.get('rank')}: {obj.get('persona')} (Severity: {obj.get('severity_score')}/100)\n"
+            report_md += f"- **Judge:** Grounded {obj.get('judge_grounded_score')}/10 · Realism {obj.get('judge_real_buyer_score')}/10\n"
+            report_md += f"- **Page Quote:** {obj.get('trigger_line')}\n"
+            report_md += f"- **Objection:** {obj.get('lethal_objection')}\n"
+            report_md += f"- **GTM Vulnerability:** {obj.get('gtm_vulnerability')}\n"
+            report_md += f"- **Fix:** {obj.get('gtm_survival_fix')}\n"
+        st.code(report_md, language="markdown")
