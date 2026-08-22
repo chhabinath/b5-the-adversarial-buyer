@@ -38,26 +38,13 @@ st.markdown(
 st.markdown('<div class="main-title">THE ADVERSARIAL BUYER</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Simulate hostile enterprise procurement committees against your pricing page before your buyers do.</div>', unsafe_allow_html=True)
 
-# 2. Async Handling Placeholder for Playwright
-async def async_playwright_extract(url: str):
-    """
-    Structural placeholder for your asynchronous Playwright extraction function.
-    Drop your Playwright browser/page automation logic and stealth extraction here.
-    """
-    # Example:
-    # async with async_playwright() as p:
-    #     browser = await p.chromium.launch(headless=True)
-    #     page = await browser.new_page()
-    #     await page.goto(url)
-    #     content = await page.content()
-    #     await browser.close()
-    await asyncio.sleep(1.0)
-    return {"url": url, "status": "extracted"}
+from services.scraper import fetch_page
 
 
-def run_extraction_pipeline(url: str):
-    """Synchronous bridge to run the async Playwright function inside Streamlit."""
-    return asyncio.run(async_playwright_extract(url))
+# 2. Page Extraction Pipeline
+def run_extraction_pipeline(url: str) -> str:
+    """Fetch clean markdown content using Jina Reader scraper service (with disk cache)."""
+    return fetch_page(url)
 
 
 # 3. Mocked Objection Data (CFO, CISO, VP Engineering)
