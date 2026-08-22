@@ -21,30 +21,30 @@ When SaaS companies sell software to enterprise organizations, deals are evaluat
 
 ```mermaid
 flowchart TD
-    User([User / Judge in Browser]) -->|Enters URL| StreamlitUI[Streamlit Dashboard: app.py]
-    StreamlitUI -->|Target URL| ScraperModule[services/scraper.py]
+    User(["User / Judge in Browser"]) -->|Enters URL| StreamlitUI["Streamlit Dashboard: app.py"]
+    StreamlitUI -->|Target URL| ScraperModule["services/scraper.py"]
     
-    subgraph Scraping & Caching Layer
-        ScraperModule -->|Check SHA1 Hash| DiskCache[(./cache/scrapes/{sha1}.json)]
+    subgraph "Scraping & Caching Layer"
+        ScraperModule -->|Check SHA1 Hash| DiskCache[("Disk Cache: ./cache/scrapes/*.json")]
         DiskCache -->|Cache HIT| ScraperModule
-        DiskCache -.->|Cache MISS| JinaAPI[Jina Reader: https://r.jina.ai/{url}]
+        DiskCache -.->|Cache MISS| JinaAPI["Jina Reader API"]
         JinaAPI -->|Clean Markdown| DiskCache
     end
     
-    ScraperModule -->|Raw Markdown Content| LLMModule[services/llm_analyzer.py]
+    ScraperModule -->|Raw Markdown Content| LLMModule["services/llm_analyzer.py"]
     
-    subgraph Adversarial AI Engine
-        LLMModule -->|Adversarial Buyer System Prompt| OpenRouter[OpenRouter Unified Gateway]
-        OpenRouter -->|Model: nvidia/nemotron-3.5-lightning:free| LLMResponse[Raw JSON Completion]
-        OpenRouter -.->|Fallback if Busy| BackupModels[dots-3-note / liquid-lfm]
-        LLMResponse -->|Schema Validation & Sorting| StructuredData[Ranked Objections JSON]
+    subgraph "Adversarial AI Engine"
+        LLMModule -->|Adversarial Buyer System Prompt| OpenRouter["OpenRouter Unified Gateway"]
+        OpenRouter -->|Model: nvidia/nemotron-3.5-lightning:free| LLMResponse["Raw JSON Completion"]
+        OpenRouter -.->|Fallback if Busy| BackupModels["dots-3-note / liquid-lfm"]
+        LLMResponse -->|Schema Validation & Sorting| StructuredData["Ranked Objections JSON"]
     end
     
     StructuredData --> StreamlitUI
-    StreamlitUI --> Render1[Boardroom Verdict Banner]
-    StreamlitUI --> Render2[Overall Deal Damage Score: 0-100]
-    StreamlitUI --> Render3[Ranked Objection Cards with Exact Line Citations]
-    StreamlitUI --> Render4[Judge Live Architecture Inspector Tabs]
+    StreamlitUI --> Render1["Boardroom Verdict Banner"]
+    StreamlitUI --> Render2["Overall Deal Damage Score: 0-100"]
+    StreamlitUI --> Render3["Ranked Objection Cards with Exact Line Citations"]
+    StreamlitUI --> Render4["Judge Live Architecture Inspector Tabs"]
 ```
 
 ---
