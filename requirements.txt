@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+playwright
+playwright-stealth
+beautifulsoup4
+sqlmodel
+psycopg2-binary
+openai
+python-dotenv
+pydantic
+streamlit
